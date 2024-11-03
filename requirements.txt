@@ -1,0 +1,21 @@
+fastapi[standard]
+gTTS
+soundfile
+python-dotenv
+transformers
+groq
+python-multipart
+paddlepaddle
+shapely
+opencv-python
+lmdb
+python-docx
+pyclipper
+scikit-image
+imgaug
+beautifulsoup4
+albumentations
+sympy==1.13.1
+numpy==1.26.4
+
+# conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia
