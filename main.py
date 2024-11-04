@@ -1,7 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from typing import List
-from pydantic import BaseModel
 from gtts import gTTS
 from io import BytesIO
 from transformers import pipeline
@@ -14,16 +13,18 @@ from TTS.cors_config import setup_cors  # 외부 CORS 설정 모듈 가져오기
 from TTS.model import TextInput
 
 import os
+import json  # JSON 파싱을 위한 모듈 추가
+import re  # 날짜 형식 검사 및 수정용
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
-
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 # fastapi 시작 전 초기화 작업
 def start():
     print("Yaggugi-backend-fastapi start")
     # OCR 모델 초기화
-    app.state.ocr_en_model = PaddleOCR(lang="en")
-    app.state.ocr_kr_model = PaddleOCR(lang="korean")
+    app.state.ocr_en_model = PaddleOCR(lang="en", use_gpu=True)
+    app.state.ocr_kr_model = PaddleOCR(lang="korean", use_gpu=True)
 
     # Load the Whisper model for ASR
     app.state.transcriber = pipeline(
@@ -33,8 +34,7 @@ def start():
     # Set up Groq client
     app.state.client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-    # CORS 설정 적용
-    setup_cors(app)
+    allowed_origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
 
 
 # fastapi 종료 전 마무리 작업
@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)  # FastAPI 앱 초기화
 
+setup_cors(app)
 
 @app.post("/ocr")
 async def create_upload_files(file: UploadFile):
@@ -111,14 +112,25 @@ async def upload_audio(file: UploadFile = File(...)):
     # Delete the temporary file
     os.remove(file_location)
 
-    # Request sentiment analysis from Groq API
+    # Request sentiment analysis and date extraction from Groq API
     client = app.state.client
     completion = client.chat.completions.create(
         model="llama3-8b-8192",
         messages=[
             {
                 "role": "user",
-                "content": f"please determine if the speaker ate the medicine or not. If yes, please say 'positive', if not, respond with 'negative'. I want the response only to be 'positive' or 'negative' '{text}'",
+                "content": f"""
+                Please analyze the following text to determine if the speaker took medicine or not. 
+                If the speaker took medicine, respond with "positive"; if not, respond with "negative". Also, identify any dates mentioned 
+                in the text. Respond strictly in the following JSON format, without additional commentary:
+            
+                {{
+                "sentiment": "positive" or "negative",
+                "mentioned_date": "MM-DD" (if any date is mentioned, otherwise null)
+                }}
+            
+                Here is the text: "{text}"
+                """
             }
         ],
         temperature=1,
@@ -128,13 +140,28 @@ async def upload_audio(file: UploadFile = File(...)):
         stop=None,
     )
 
-    # Generate result text from Groq completion
-    result_text = ""
+    # Generate result JSON from Groq completion
+    result_json  = ""
     for chunk in completion:
-        result_text += chunk.choices[0].delta.content or ""
+        result_json += chunk.choices[0].delta.content or ""
 
-    # Log the results
+    # Parse the result JSON and add default year to the date
+    try:
+        parsed_result = json.loads(result_json)  # JSON 문자열을 파싱
+        # 날짜가 MM-DD 형식이라면 2024년을 추가
+        if parsed_result.get("mentioned_date"):
+            if re.match(r"^\d{2}-\d{2}$", parsed_result["mentioned_date"]):
+                parsed_result["mentioned_date"] = f"2024-{parsed_result['mentioned_date']}"
+        print("Parsed Sentiment Analysis Result:", parsed_result)  # 터미널에 JSON 출력
+
+    except json.JSONDecodeError:
+        print("Failed to parse JSON response:", result_json)  # JSON 파싱 실패 시 출력
+
+    # Log the results for debugging
     print("Transcribed Text:", text)
-    print("Sentiment Analysis Result:", result_text)
+    print("Sentiment Analysis Result (Raw JSON):", result_json)
 
-    return {"transcribed_text": text, "sentiment_analysis_result": result_text}
+    return {
+        "transcribed_text": text, 
+        "sentiment_analysis_result": parsed_result if 'parsed_result' in locals() else result_json
+    }

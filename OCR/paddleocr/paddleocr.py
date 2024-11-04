@@ -634,6 +634,7 @@ class PaddleOCR(predict_system.TextSystem):
         ), "ocr_version must in {}, but get {}".format(
             SUPPORT_OCR_MODEL_VERSION, params.ocr_version
         )
+        print(f'params.use_gpu: {params.use_gpu}')
         params.use_gpu = check_gpu(params.use_gpu)
 
         if not params.show_log:
